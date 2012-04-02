@@ -7,6 +7,7 @@ object validation {
   sealed abstract class Validation[T] {
     def map[Q](f: T => Q):Validation[Q] = flatMap(t => Valid(f(t)))
     def flatMap[Q](f: T => Validation[Q]):Validation[Q] 
+    def >>=[Q](f: T => Validation[Q]):Validation[Q] = flatMap(f)
 
     def isValid():Boolean
     def appendError(err: String): Validation[T]

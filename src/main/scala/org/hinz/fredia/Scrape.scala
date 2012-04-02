@@ -109,27 +109,16 @@ class Freida {
     // Parse results
     // Requires 8 hits
     val http = httpWithSession
-
-    val stateSearchOK = postStateSearch(state, http)
-
-    val specSearchOK =
-      stateSearchOK.flatMap(
-        Unit => postSpecSearch(program, http))
-
     val idPattern = new Regex("pgmNumber=(\\d+)")
 
-    val finalOK = specSearchOK.flatMap { 
-      Unit => {
-        Valid(http(resultsList << Map("searchImageButton" -> "Search", "sort" -> "spec") >- (str =>
-          { 
-            str.split("\n").flatMap (str=>
-                                     idPattern.findFirstMatchIn(str)) map (_.group(1)) toList
-          })))
-      }
-    }
-             
-    log(finalOK)
-    finalOK
+    postStateSearch(state, http) >>=
+      (Unit => postSpecSearch(program, http)) >>=
+        (Unit => {
+          Valid(http(resultsList << Map("searchImageButton" -> "Search", "sort" -> "spec") >- (str =>
+            { 
+              str.split("\n").flatMap (str=>
+                                       idPattern.findFirstMatchIn(str)) map (_.group(1)) toList
+            })))})
   }
 }
 
