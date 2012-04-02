@@ -43,7 +43,7 @@ class Freida {
   // Final Search
   val resultsList = userReq / "programSearchSubmitDispatch.do" secure
 
-  lazy val httpWithSession = {
+  def httpWithSession = {
     val http = new Http
     http(progSearch </> {
       doc =>
@@ -56,9 +56,10 @@ class Freida {
     http
   }
 
+  type SearchResult = (Map[String,(String,String)], Map[String,String])
 
-  def searchListSpecsWithOpenSession(http:Http):(Map[String,(String,String)],Map[String,String]) = {
-    val handler = specSearchList </> { 
+  def searchListWithOpenSession(req: Request, http:Http):SearchResult = {
+    val handler = req </> { 
       doc => {
         val part1 = doc.select(".application-table").select("input").grouped(2).map(a => (a(0), a(1))).map {
           case (e1:org.jsoup.nodes.Element, e2:org.jsoup.nodes.Element) => e2.attr("value") -> (e1.attr("name"), e1.attr("value"))
@@ -74,27 +75,9 @@ class Freida {
 
     http(handler)
   }
-
-  def searchListStatesWithOpenSession(http:Http):(Map[String,(String,String)],Map[String,String]) = {
-    val handler = stateSearchList </> { 
-      doc => {
-        val part1 = doc.select(".application-table").select("input").grouped(2).map(a => (a(0), a(1))).map {
-          case (e1:org.jsoup.nodes.Element, e2:org.jsoup.nodes.Element) => e2.attr("value") -> (e1.attr("name"), e1.attr("value"))
-        }.foldLeft(Map[String,(String,String)]())(_+_)
-
-        val part2 = doc.select(".application-table").select("input").grouped(2).map(a => (a(0), a(1))).map {
-          case (e1:org.jsoup.nodes.Element, e2:org.jsoup.nodes.Element) => e2.attr("name") -> e2.attr("value")
-        }.foldLeft(Map[String,String]())(_+_)
-
-        (part1, part2)
-      }
-    }
-
-    http(handler)
-  }
-
-  def postSearch(search: String , http: Http, req: Request, meta: Map[String,String], f: Http => (Map[String,(String,String)],Map[String,String])):Validation[Unit] = {
-    val (matches, extra) = f(http)
+    
+  def postSearch(search: String , http: Http, req: Request, meta: Map[String,String], searchReq: Request):Validation[Unit] = {
+    val (matches, extra) = searchListWithOpenSession(searchReq, http)
     val matchOpt = matches.get(search)
 
     matchOpt match {
@@ -108,10 +91,10 @@ class Freida {
   }
 
   def postStateSearch(state: String, http: Http):Validation[Unit] = 
-    postSearch(state, http, searchList, searchStatePostMeta, searchListStatesWithOpenSession _)
+    postSearch(state, http, searchList, searchStatePostMeta, stateSearchList)
 
   def postSpecSearch(spec: String, http: Http):Validation[Unit] = 
-    postSearch(spec, http, searchList, searchSpecPostMeta, searchListSpecsWithOpenSession _)
+    postSearch(spec, http, searchList, searchSpecPostMeta, specSearchList)
 
 
   def searchPrograms(state: String, program: String):Validation[List[String]] = {
