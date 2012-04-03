@@ -22,6 +22,13 @@ object base {
   implicit def productIsShowable[T <: Product]: Showable[T] = new Showable[T] { def asString(t: T) = t.toString }
   implicit def stringIsShowable: Showable[String] = new Showable[String] { def asString(t: String) = t }
   implicit def anyValIsShowable[T <: AnyVal]: Showable[T] = new Showable[T] { def asString(t: T) = "" + t }
+  implicit def setIsShowable[T:Showable]: Showable[Set[T]] = new Showable[Set[T]] { 
+    def asString(t: Set[T]) = {
+      val s = implicitly[Showable[T]]
+      "Set(%s)" format t.map(i => s.asString(i)).mkString(", ")
+    }
+  }
+
   implicit def mapIsShowable[X:Showable,Y:Showable]: Showable[Map[X,Y]] = new Showable[Map[X,Y]] {
     def pad(s: String, len: Int) = {
       if (s.length() >= len) {

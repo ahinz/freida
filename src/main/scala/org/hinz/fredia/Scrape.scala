@@ -3,10 +3,12 @@ package org.hinz.freida
 import scala.collection.JavaConversions._
 import scala.util.matching.Regex
 
+import scala.annotation.tailrec
+
 import org.hinz.base._
 import org.hinz.validation._
 
-import scala.xml._
+import org.jsoup.nodes._
 
 import dispatch._
 import dispatch.Request._
@@ -16,7 +18,7 @@ object log {
   def apply[T:Showable](a: T) = { show(a); a }
 }
 
-class Freida {
+class FreidaService {
   // Base Request addresses
   val baseReq = :/("freida.ama-assn.org") / "Freida"
   val userReq = baseReq / "user"
@@ -26,6 +28,9 @@ class Freida {
 
   // EULA
   val eulaSubmit = baseReq / "eulaSubmit.do" secure
+
+  // Print
+  val pgmPrint = userReq / "pgmPrint.do" secure
 
   // Search specifications
   val searchList = userReq / "programSearchDispatch.do" secure
@@ -75,6 +80,9 @@ class Freida {
 
     http(handler)
   }
+
+  def stateList():Set[String] = 
+    searchListWithOpenSession(stateSearchList, httpWithSession)._1.keySet
     
   def postSearch(search: String , http: Http, req: Request, meta: Map[String,String], searchReq: Request):Validation[Unit] = {
     val (matches, extra) = searchListWithOpenSession(searchReq, http)
@@ -120,14 +128,99 @@ class Freida {
                                        idPattern.findFirstMatchIn(str)) map (_.group(1)) toList
             })))})
   }
+
+  def extractTableCellPattern(d: Document, regex: Regex):Option[String] = {
+    d select("td") flatMap(s => regex.findFirstMatchIn(s.toString())) map (_.group(1)) match {
+      case Seq() => None
+      case Seq(x, _*) => Some(x)
+    }
+  }
+
+  case class Program(lastUpdated: Option[String], surveyReceived: Option[String], director: Option[Contact], contact: Option[Contact], webAddr: String)
+  case class Contact(name: String, address: String, contact: Map[String,String])
+
+  def exhaustMatch(s: String, r: Regex):List[Regex.Match] = r.findFirstMatchIn(s) match {
+    case Some(m) => m :: exhaustMatch(m.after(2).toString, r)
+    case None => Nil
+  }
+
+  def extractInfoFromTable(t: Element):Option[Contact] = {
+    val tds = t select("tr") apply(1) select("td") 
+    if (tds.length == 3) {
+      val addr = tds(0).toString
+      val addrMatches = """>\s*([^<]+)<.*?>(.*)</td>""".r.findFirstMatchIn(addr)
+
+      val contactRaw = tds(2).toString.replaceAll("&nbsp;"," ")
+      val matches = exhaustMatch(contactRaw, """>\s+([^<^>]*?)\:.*?\s+([^<]*) <""".r).map(m => (m.group(1).trim, m.group(2).trim))
+
+      Some(Contact(addrMatches.map(_.group(1)).getOrElse(""), 
+                   addrMatches.map(_.group(2).replaceAll("<.*?>","").replaceAll("&nbsp;"," ")).getOrElse(""), 
+                   matches.foldLeft(Map[String,String]())(_+_)))
+    } else {
+      None
+    }
+  }
+
+  def extractProgramDirector(d: Document):Option[Contact] = {
+    extractInfoFromTable(d.select("table")(3))
+  }
+
+  def extractProgramContact(d: Document):Option[Contact] = {
+    extractInfoFromTable(d.select("table")(4))
+  }
+
+  def parseProgram(d: Document):Program = {
+
+    // extract last updated and survey rcvd
+    Program(
+      extractTableCellPattern(d, """Last updated.*(\d+/\d+/\d+)<""".r),
+      extractTableCellPattern(d, """Survey received.*(\d+/\d+/\d+)""".r),
+      extractProgramDirector(d),
+      extractProgramContact(d),
+      d.select("a[target=FREIDAEXT").attr("href"))
+
+  }
+
+  def getProgram(pid: String, http: Http):Program = {
+    http(searchList <<? Map("method" -> "searchByPgmNbr", "pgmNumber" -> pid, "page" -> "1") >|)
+    http(pgmPrint </> (d => parseProgram(d)))
+  }
 }
 
+object Freida {
+  def insertProgramsForSpec(spec: String, f: FreidaService, m: FreidaDAO):Validation[Int] = {
+    insertPrograms(f.stateList() toList, spec, f, m)
+  }
+
+  @tailrec
+  def insertPrograms(states: List[String], spec: String, f: FreidaService, m: FreidaDAO, v: Validation[Int] = Valid(0)):Validation[Int] = states match {
+    case s :: ss => {
+      log("Inserting programs for %s in %s (%d to go)" format (spec, s, ss.length))
+      Thread.sleep(2000)
+      insertPrograms(ss, spec, f, m, v >>= (cnt => insertProgram(s, spec, f, m) map (_ + cnt)))
+    }
+    case Nil => v
+  }
+      
+
+  // returns # of programs inserted
+  def insertProgram(state: String, spec: String, f: FreidaService, m: FreidaDAO):Validation[Int] = {
+    f.searchPrograms(state,spec) map
+    (programs => (programs.map(pid => m.insertProgram(pid, state, spec)) map (if(_) 1 else 0)).foldLeft(0)(_+_))
+  }
+}
+
+
 object Test {
-
-
   def main(args: Array[String]) {
-    val f = new Freida()
-    //f.searchListSpecsWithOpenSession(f.httpWithSession)
-    log(f.searchPrograms("Pennsylvania","Internal Medicine"))
+    val f = new FreidaService()
+    val fm = new FreidaDAO()
+    // f.searchPrograms("Pennsylvania","Internal Medicine") >>=
+    // (programs => programs.map(fm.insertProgram(
+    // log(fm.insertProgram("1404121374","Pennsylvania","Internal Medicine"))
+//    log(Freida.insertPrograms("Pennsylvania","Internal Medicine", f, fm))
+//    log(f.stateList())
+//    log(Freida.insertProgramsForSpec("Internal Medicine", f, fm))
+    log(f.getProgram("1401021091", f.httpWithSession))
   }
 }

@@ -15,7 +15,8 @@ object FreidaBuild extends Build {
       "net.databinder" %% "dispatch-nio" % vers,
       "net.databinder" %% "dispatch-http" % vers,
       "net.databinder" %% "dispatch-tagsoup" % vers,
-      "net.databinder" %% "dispatch-jsoup" % vers
+      "net.databinder" %% "dispatch-jsoup" % vers,
+      "com.mongodb.casbah" %% "casbah" % "2.1.5-1"
     )
   )
 
