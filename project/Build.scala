@@ -18,6 +18,7 @@ object FreidaBuild extends Build {
       "net.databinder" %% "dispatch-jsoup" % vers,
       "com.mongodb.casbah" %% "casbah" % "2.1.5-1"
     )
+//    scalacOptions ++= Seq("-unchecked", "-deprecation")
   )
 
 
