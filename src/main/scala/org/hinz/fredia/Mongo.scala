@@ -9,6 +9,7 @@ object mongo extends MongoConversions {
     val mongoDB = mongoConn("freida")
     
     val programs = mongoDB("programs")
+    val institutions = mongoDB("institutions")
 
     def programIds() = programs find() map (a => a.get("pid").toString) toList
     
@@ -35,6 +36,18 @@ object mongo extends MongoConversions {
         case None => false
       }
     }
+
+    def insertInstitution(iid: String, inst: AnyRef):Boolean =
+      institutions.findOne(MongoDBObject("iid" -> iid)) match {
+        case Some(_) => false
+        case None => {
+          institutions += MongoDBObject("iid" -> iid, "inst" -> inst)
+          true
+        }
+      }      
+
+    def findInstitution(iid: String) = 
+      institutions findOne(MongoDBObject("iid" -> iid)) map (_.get("inst")) flatMap fromMongo[Institution]
   }
 }
 
@@ -204,6 +217,29 @@ trait MongoConversions {
             Faculty(ftp,ftnp,ptp,ptnp)
 
   }
+
+  implicit def instIsMongoObj: MongoStorable[Institution] = new MongoStorable[Institution] {
+    def toMongo(i: Institution) = 
+      MongoDBObject("__class" -> "Institution",
+                    "iid" -> asMongo(i.iid),
+                    "name" -> asMongo(i.name),
+                    "address" -> asMongo(i.address),
+                    "clinicalEnv" -> asMongo(i.clinicalEnv),
+                    "resources" -> asMongo(i.resources),
+                    "medicalSchools" -> asMongo(i.medicalSchools))
+
+    def fromMongo(a: Any) =
+      for(map <- safeConvertMDB(a) ;
+          cmap <- checkClass(map, "Institution") ;
+          id <- cmap.get("iid") map (_.toString) ;
+          name <- cmap.get("name") map (_.toString) ;
+          address <- cmap.get("address") map (_.toString) ;
+          clinicalEnv <- cmap.get("clinicalEnv") flatMap (f => implicitly[MongoStorable[Option[Map[String,String]]]].fromMongo(f)) ;
+          resources <- cmap.get("resources") flatMap (f => implicitly[MongoStorable[Option[Map[String,(String,String)]]]].fromMongo(f)) ;
+          medicalSchools <- cmap.get("medicalSchools") flatMap (f => implicitly[MongoStorable[Option[List[(String,String)]]]].fromMongo(f))) yield
+            Institution(id, name, address, clinicalEnv, resources, medicalSchools)
+  }
+      
 
   implicit def programIsMongoObj: MongoStorable[Program] = new MongoStorable[Program] {
     def toMongo(p: Program) = {

@@ -20,6 +20,9 @@ object log {
   def apply[T:Showable](a: T) = { show(a); a }
 }
 
+case class Institution(val iid: String, name: String, address: String, clinicalEnv: Option[Map[String, String]], 
+                       resources: Option[Map[String, (String,String)]], medicalSchools: Option[List[(String,String)]])
+
 case class Program(programId: String,
                    lastUpdated: Option[String], 
                    surveyReceived: Option[String], 
@@ -55,11 +58,13 @@ class FreidaService {
 
   // Print
   val pgmPrint = userReq / "pgmPrint.do" secure
+  val instPrint = userReq / "instPrint.do" secure
 
   // Search specifications
   val searchList = userReq / "programSearchDispatch.do" secure
   val specSearchList = searchList <<? Map("method" -> "viewSpec")  secure
   val stateSearchList = searchList <<? Map("method" -> "viewStateLocation") secure
+  val searchInstList = userReq / "institutionSearchSubmit.do" secure
 
   // Search post params
   val searchStatePostMeta = Map("method" -> "continueWithSearch",
@@ -128,18 +133,7 @@ class FreidaService {
   def postSpecSearch(spec: String, http: Http):Validation[Unit] = 
     postSearch(spec, http, searchList, searchSpecPostMeta, specSearchList)
 
-
   def searchPrograms(state: String, program: String):Validation[List[String]] = {
-    // Flow:
-    // 
-    // Get a session
-    // Grab list of states and intersect with "states"
-    // POST state list
-    // Grab a list of programs and intersect with "programs"
-    // POST program list
-    // POST search form
-    // Parse results
-    // Requires 8 hits
     val http = httpWithSession
     val idPattern = new Regex("pgmNumber=(\\d+)")
 
@@ -273,8 +267,6 @@ class FreidaService {
   val basicInfoStrs = List("Accredited length of training", "Required length", "Accepting applications", "Program start")
 
   def parseProgram(pId: String, d: Document):Program = {
-
-    // extract last updated and survey rcvd
     Program(
       pId,
       extractTableCellPattern(d, """Last updated.*(\d+/\d+/\d+)<""".r),
@@ -297,6 +289,47 @@ class FreidaService {
 
   }
 
+  def elementToString(e: Element) = strip(e.text)
+
+  def extractNameAndAddress(e: Element) = {
+    val fonts = e.select("table")(0).select("font")
+    (elementToString(fonts(0)), elementToString(fonts(1)))
+  }
+
+  def convertBeds(e: Element) = {
+    val es = elementToString(e)
+    if (es.indexOf("Beds") >= 0) {
+      val s = es replace("Beds","")
+      if (s.length == 0) "0" else s
+    } else {
+      es
+    }
+  }
+
+  def extractResources(e: Element) =
+    findNextTableWithText(e, "Special clinical resources") map (tbl => {
+      tbl select("tr") map (_.select("td")) map (row => elementToString(row(0)) -> (elementToString(row(1)), convertBeds(row(2))))
+    }) map (a => Map(a:_*))
+
+  def extractMedAf(e: Element) =
+    findTableWithText(e, "This institution has the following affiliations") map (tbl =>
+      tbl select("tr") map (_.select("td")) filter(_.length == 3) map (a => (elementToString(a(0)), elementToString(a(1)))) toList)
+
+  def parseInstitution(iId: String, d: Document):Institution = {
+    val (name, addr) = extractNameAndAddress(d)
+    Institution(iId, 
+                name, 
+                addr,
+                findTableWithText(d, "Clinical environment") map extractTablePairs map (_.mapValues( a => if (a.length == 0) "0" else a )),
+                extractResources(d),
+                extractMedAf(d))
+  }
+
+  def getInstitution(iid: String, http: Http):Institution = {
+    http(searchInstList <<? Map("forward" -> "affiliated", "instNbr" -> iid) >|)
+    http(instPrint </> (i => parseInstitution(iid, i)))
+  }
+
   def getProgram(pid: String, http: Http):Program = {
     http(searchList <<? Map("method" -> "searchByPgmNbr", "pgmNumber" -> pid, "page" -> "1") >|)
     http(pgmPrint </> (d => parseProgram(pid,d)))
@@ -317,13 +350,21 @@ object Freida {
     }
     case Nil => v
   }
-      
 
   // returns # of programs inserted
   def insertProgram(state: String, spec: String, f: FreidaService, m: FreidaDAO):Validation[Int] = {
     f.searchPrograms(state,spec) map
     (programs => (programs.map(pid => m.insertProgram(pid, state, spec)) map (if(_) 1 else 0)).foldLeft(0)(_+_))
   }
+
+  def insertProgramData(pIds: List[String], f: FreidaService, m: FreidaDAO) = {
+    pIds map ( p => {
+      Thread.sleep(500)
+      log("Working on program %s" format p)
+      m.updateProgram(p, asMongo(f.getProgram(p, f.httpWithSession)))
+    })
+  }
+
 }
 
 
@@ -341,14 +382,16 @@ object Test {
 //    log(fm.updateProgram("1401021091", asMongo(f.getProgram("1401021091", f.httpWithSession))))
 //    log(f.getProgram("1401512544", f.httpWithSession))
 //    log(fm.findProgram("1401021091"))
-    fm.programIds map ( p => {
-      Thread.sleep(500)
-      log("Working on program %s" format p)
-      fm.updateProgram(p, asMongo(f.getProgram(p, f.httpWithSession)))
-    })
+    // fm.programIds map ( p => {
+    //   Thread.sleep(500)
+    //   log("Working on program %s" format p)
+    //   fm.updateProgram(p, asMongo(f.getProgram(p, f.httpWithSession)))
+    // })
 
-//    println(asMongo(f.getProgram("1404111375", f.httpWithSession)))
-      
+//    Println(asMongo(f.getProgram("1404111375", f.httpWithSession)))
+//    log(f.getInstitution("410189", f.httpWithSession))
+//    fm.insertInstitution("410189", asMongo(f.getInstitution("410189", f.httpWithSession)))
+    log(fm.findInstitution("410189"))
     println("-end-")
   }
 }
