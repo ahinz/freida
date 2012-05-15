@@ -23,7 +23,11 @@ object log {
 case class Institution(val iid: String, name: String, address: String, clinicalEnv: Option[Map[String, String]], 
                        resources: Option[Map[String, (String,String)]], medicalSchools: Option[List[(String,String)]])
 
+case class MProgram(programId: String, name: String, spec: String, director: Option[String], contact: Option[String])
+
 case class Program(programId: String,
+                   name: String,
+                   spec: String,
                    lastUpdated: Option[String], 
                    surveyReceived: Option[String], 
                    director: Option[Contact],
@@ -40,7 +44,11 @@ case class Program(programId: String,
                    education: Option[Map[String,String]],
                    evals: Option[Map[String,String]],
                    benefits: Option[Map[String,String]],
-                   salary: Option[Map[String,(String,String,String)]])
+                   salary: Option[Map[String,(String,String,String)]]) 
+{
+  def mini = MProgram(programId, name, spec, director map (_.name), contact map (_.name))
+}
+                    
 
 case class Faculty(fullTimePhy: Int, fullTimeNonPhy: Int, partTimePhy: Int, partTimeNonPhy: Int)
 case class Contact(name: String, address: String, contact: Map[String,String])
@@ -264,11 +272,17 @@ class FreidaService {
     })
   }
 
+
+  def extractName(e: Element) = elementToString(e.select("table")(0).select("td")(0)).split("Identifier:")(0)
+  def extractSpec(e: Element) = elementToString(e.select("table")(0).select("td")(0)).split("Specialty:")(1)
+
   val basicInfoStrs = List("Accredited length of training", "Required length", "Accepting applications", "Program start")
 
   def parseProgram(pId: String, d: Document):Program = {
     Program(
       pId,
+      extractName(d),
+      extractSpec(d),
       extractTableCellPattern(d, """Last updated.*(\d+/\d+/\d+)<""".r),
       extractTableCellPattern(d, """Survey received.*(\d+/\d+/\d+)""".r),
       extractProgramDirector(d),
@@ -358,18 +372,52 @@ object Freida {
   }
 
   def insertProgramData(pIds: List[String], f: FreidaService, m: FreidaDAO) = {
+    val http = f.httpWithSession
     pIds map ( p => {
       Thread.sleep(500)
       log("Working on program %s" format p)
-      m.updateProgram(p, asMongo(f.getProgram(p, f.httpWithSession)))
+      m.updateProgram(p, asMongo(f.getProgram(p, http)))
+    })
+  }
+
+  def insertInstitutionData(iIds: List[String], f: FreidaService, m: FreidaDAO) = {
+    val http = f.httpWithSession
+    iIds foreach ( iid => {
+      Thread.sleep(500)
+      log("Working on institution %s" format iid)
+      m.insertInstitution(iid, asMongo(f.getInstitution(iid, http)))
     })
   }
 
 }
 
+import unfiltered.request._
+import unfiltered.response._
+import com.codahale.jerkson.Json._
+
+object Test1 {
+  def wrapCB(p: Map[String,Seq[Any]])(content: String) =
+    p("callback") match {
+      case Seq() => content
+      case Seq(a) => "%s(%s)" format(a toString, content)
+    }
+
+  lazy val f = new FreidaDAO()
+
+  val echo = unfiltered.filter.Planify {
+    case Path(Seg("programs" :: Nil)) & Params(p) => {
+      val state = p.get("state").get.head
+      ResponseString(wrapCB(p)(generate(Map("state" -> state, "programs" -> (f.findByState(state) map (_.mini))))))
+    }
+  }
+  
+  def main(args: Array[String]) {
+    unfiltered.jetty.Http.local(1111).filter(echo).run()
+  }
+}
 
 object Test {
-  def main(args: Array[String]) {
+  def main1(args: Array[String]) {
     val f = new FreidaService()
     val fm = new FreidaDAO()
     // f.searchPrograms("Pennsylvania","Internal Medicine") >>=
@@ -383,7 +431,7 @@ object Test {
 //    log(f.getProgram("1401512544", f.httpWithSession))
 //    log(fm.findProgram("1401021091"))
     // fm.programIds map ( p => {
-    //   Thread.sleep(500)
+    //   Thread.sleep(200)
     //   log("Working on program %s" format p)
     //   fm.updateProgram(p, asMongo(f.getProgram(p, f.httpWithSession)))
     // })
@@ -391,7 +439,15 @@ object Test {
 //    Println(asMongo(f.getProgram("1404111375", f.httpWithSession)))
 //    log(f.getInstitution("410189", f.httpWithSession))
 //    fm.insertInstitution("410189", asMongo(f.getInstitution("410189", f.httpWithSession)))
-    log(fm.findInstitution("410189"))
+//    log(fm.findInstitution("410189"))
+//    println(fm.institutionIdsFromPrograms)
+//    Freida.insertInstitutionData(fm.institutionIdsFromPrograms toList, f, fm)
+//    val savedIds = fm.findInstitutions().toList.flatten.map(_.iid) toSet
+//    val allIds = fm.institutionIdsFromPrograms toSet
+
+//    val remaining = (allIds -- savedIds) - "420289"
+
+ //   Freida.insertInstitutionData(remaining toList, f, fm)
     println("-end-")
   }
 }

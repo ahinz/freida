@@ -11,10 +11,53 @@ object mongo extends MongoConversions {
     val programs = mongoDB("programs")
     val institutions = mongoDB("institutions")
 
+    def safeConvertMDB(a: Any)(implicit ev:com.mongodb.BasicDBObject => MongoDBObject):Option[MongoDBObject] =
+      safeConvert[com.mongodb.BasicDBObject](a) map ev
+
+    def safeConvert[T:Manifest](a: Any):Option[T] = {
+      val erasure = manifest[T] match {
+        case Manifest.Byte => classOf[java.lang.Byte]
+        case Manifest.Short => classOf[java.lang.Short]
+        case Manifest.Char => classOf[java.lang.Character]
+        case Manifest.Long => classOf[java.lang.Long]
+        case Manifest.Float => classOf[java.lang.Float]
+        case Manifest.Double => classOf[java.lang.Double]
+        case Manifest.Boolean => classOf[java.lang.Boolean]
+        case Manifest.Int => classOf[java.lang.Integer]
+        case m => m.erasure
+      }
+
+      if(erasure.isInstance(a)) Some(a.asInstanceOf[T]) else {
+        println("Failed to convert " + a + " to " + erasure + " orginally of type " + a.getClass)
+        None
+      }
+    }
+
     def programIds() = programs find() map (a => a.get("pid").toString) toList
+
+    def institutionIdsFromPrograms():Set[String] = (programs find(MongoDBObject(), MongoDBObject("info.institutions" -> "1")) flatMap (mdb => {
+      Some(mdb.get("info")) flatMap 
+        safeConvertMDB flatMap 
+          (_.get("institutions")) flatMap 
+            fromMongo[Option[Map[String,List[String]]]] flatMap
+              (a => a) map (_.values.flatten)
+    }) toSet).flatten
     
     def findProgram(pid: String):Option[Program] =
       programs.findOne(MongoDBObject("pid" -> pid)) map (_.get("info")) flatMap fromMongo[Program]
+
+    def findByState(state: String):List[Program] =
+      programs.find(MongoDBObject("state" -> state)) flatMap (m => fromMongo[Program](m.get("info"))) toList
+
+    def allProgramsByState():Map[String,List[Program]] = 
+      (programs map (m => m.get("state") -> fromMongo[Program](m.get("info"))) foldLeft(Map[String,List[Option[Program]]]())) { 
+        (m,t) => (m,(t._1.toString, t._2)) match {
+          case (map,(state,pgm)) => map + (state -> (pgm :: (map get state getOrElse(List()))))
+        }
+      } mapValues(_.flatten)
+
+    def allPrograms() = 
+      programs map (_.get("info")) map fromMongo[Program]
 
     def insertProgram(pid: String, state: String, spec: String):Boolean = {
       val program = MongoDBObject("pid" -> pid, "state" -> state, "spec" -> spec)
@@ -45,6 +88,8 @@ object mongo extends MongoConversions {
           true
         }
       }      
+
+    def findInstitutions() = institutions map (a => fromMongo[Institution](a.get("inst")))
 
     def findInstitution(iid: String) = 
       institutions findOne(MongoDBObject("iid" -> iid)) map (_.get("inst")) flatMap fromMongo[Institution]
@@ -175,7 +220,10 @@ trait MongoConversions {
           m.get("value") match {
             case Some(q) => implicitly[MongoStorable[T]].fromMongo(q).map(a => Some(a))
             case None => Some(None)
-          })
+          }) match {
+          case None => Some(None)
+          case a => a
+        }
   }
       
   implicit def contactIsMongoObj: MongoStorable[Contact] = new MongoStorable[Contact] {
@@ -245,6 +293,8 @@ trait MongoConversions {
     def toMongo(p: Program) = {
       MongoDBObject(("__class" -> "Program"),
                     ("pId" -> asMongo(p.programId)),
+                    ("name" -> asMongo(p.name)),
+                    ("spec" -> asMongo(p.spec)),
                     ("lastUpdated" -> asMongo(p.lastUpdated)),
                     ("surveyReceived" -> asMongo(p.surveyReceived)),
                     ("director" -> asMongo(p.director)),
@@ -272,6 +322,8 @@ trait MongoConversions {
       for(map <- safeConvertMDB(a) ;
           cmap <- checkClass(map, "Program") ;
           pId <- cmap.get("pId") map (_.toString) ;
+          name <- cmap.get("name") map (_.toString) ;
+          spec <- cmap.get("spec") map (_.toString) ;
           lastUpdated <- cmap.get("lastUpdated") flatMap optExt[String] ;
           surveyReceived <- cmap.get("surveyReceived") flatMap optExt[String] ;
           director <- cmap.get("director") flatMap (f => implicitly[MongoStorable[Option[Contact]]].fromMongo(f)) ;
@@ -289,7 +341,7 @@ trait MongoConversions {
           evals <- cmap.get("evals") flatMap (f => implicitly[MongoStorable[Option[Map[String,String]]]].fromMongo(f)) ;
           benefits <- cmap.get("benefits") flatMap (f => implicitly[MongoStorable[Option[Map[String,String]]]].fromMongo(f)) ;
           salary <- cmap.get("salary") flatMap (f => implicitly[MongoStorable[Option[Map[String,(String,String,String)]]]].fromMongo(f))) yield
-            Program(pId, lastUpdated, surveyReceived, director, contact, webAddr, basicInfo, institutions, programSize, 
+            Program(pId, name, spec, lastUpdated, surveyReceived, director, contact, webAddr, basicInfo, institutions, programSize, 
                     programInfo, usmleReqs, faculty, hours, callSchedule, education, evals, benefits, salary)
 
   }
